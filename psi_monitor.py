@@ -50,6 +50,15 @@ SEND_PSI_24H  = True
 SEND_PM25_24H = True
 SEND_PM25_1H  = True
 
+# --- Alert gating (optional) ---
+# If SEND_ONLY_ON_ALERT is True, the script sends only when EITHER:
+#   - any region's 1-hour PM2.5 exceeds ALERT_1H_PM25_THRESHOLD, OR
+#   - any region has heavy rain / thundery showers forecast in the next 2h
+#
+# Default: False (send on any timestamp change, current behaviour).
+SEND_ONLY_ON_ALERT         = False
+ALERT_1H_PM25_THRESHOLD    = 0      # µg/m³ — raise to e.g. 56 for "Elevated and above"
+
 # Endpoints (verified 2026-10)
 PSI_URL           = "https://api-open.data.gov.sg/v2/real-time/api/psi"
 PM25_URL          = "https://api-open.data.gov.sg/v2/real-time/api/pm25"
@@ -96,22 +105,39 @@ if not _REGIONS_AVAILABLE:
 # Air quality bands
 # =============================================================================
 
-COLOR_RANK = {"🟢": 0, "🟠": 1, "🔴": 2, "🟣": 3, "💀": 4, "⚪": -1}
+# Severity rank used to pick the "worst" emoji for the title
+COLOR_RANK = {"🟢": 0, "🟡": 1, "🟠": 2, "🔴": 3, "💀": 4, "⚪": -1}
 
 
 def band_emoji(value: float, is_psi: bool = False) -> str:
-    """Return a single colored circle representing the air-quality band."""
-    if is_psi:
-        if value <= 50:   return "🟢"   # Good
-        if value <= 100:  return "🟠"   # Moderate
-        if value <= 200:  return "🔴"   # Unhealthy
-        if value <= 300:  return "🟣"   # Very Unhealthy
-        return "💀"                     # Hazardous
+    """Return a single colored circle representing the air-quality band.
 
-    if value <= 55:   return "🟢"       # Normal
-    if value <= 150:  return "🟠"       # Elevated
-    if value <= 250:  return "🔴"       # High
-    return "💀"                         # Very High
+    PSI bands (NEA):
+        0-50    🟢 Good
+        51-100  🟡 Moderate
+        101-200 🟠 Unhealthy
+        201-300 🔴 Very Unhealthy
+        >=301   💀 Hazardous
+
+    PM2.5 bands (NEA 1h):
+        0-55    🟢 Normal
+        56-100  🟡 Elevated (lower)
+        101-150 🟠 Elevated (upper)
+        151-250 🔴 High
+        >=251   💀 Very High
+    """
+    if is_psi:
+        if value <= 50:   return "🟢"
+        if value <= 100:  return "🟡"
+        if value <= 200:  return "🟠"
+        if value <= 300:  return "🔴"
+        return "💀"
+
+    if value <= 55:   return "🟢"
+    if value <= 100:  return "🟡"
+    if value <= 150:  return "🟠"
+    if value <= 250:  return "🔴"
+    return "💀"
 
 
 def worst_color(emojis: list[str]) -> str:
@@ -155,6 +181,14 @@ def is_rainy(forecast: str) -> bool:
     return any(kw in f for kw in RAIN_KEYWORDS)
 
 
+def is_heavy_or_thundery(forecast: str) -> bool:
+    """True if the forecast mentions heavy rain/showers or thundery showers."""
+    f = forecast.lower()
+    if not is_rainy(f):
+        return False
+    return "heavy" in f or "thundery" in f
+
+
 def rain_emoji(forecast: str) -> str:
     """Pick an emoji based on the nature of the rain forecast."""
     f = forecast.lower()
@@ -168,6 +202,29 @@ def rain_emoji(forecast: str) -> str:
 def forecast_severity(forecast: str) -> int:
     """Return a numeric severity rank for a forecast string."""
     return FORECAST_SEVERITY.get(forecast.lower(), 0)
+
+
+# =============================================================================
+# Alert gating
+# =============================================================================
+
+def is_alert_condition(readings: dict) -> bool:
+    """Return True if alert conditions are met:
+    - Any region's 1h PM2.5 exceeds ALERT_1H_PM25_THRESHOLD, OR
+    - Any region has heavy rain / thundery showers in the forecast.
+    """
+    # 1h PM2.5 check
+    pm1_vals = readings.get("pm25_1h", {})
+    if any(v > ALERT_1H_PM25_THRESHOLD for v in pm1_vals.values()):
+        return True
+
+    # Rain check
+    forecast = readings.get("forecast", {})
+    for fc in forecast.values():
+        if is_heavy_or_thundery(fc):
+            return True
+
+    return False
 
 # =============================================================================
 # HTTP helpers
@@ -381,7 +438,12 @@ def fmt_weather(readings: dict) -> str:
 
 
 def fmt_rain_forecast(readings: dict) -> str:
-    """Return a rain line if any region is forecast to get rain in the next 2h."""
+    """Return a rain line if any region is forecast to get rain in the next 2h.
+
+    The umbrella emoji (☔) is appended only when the worst forecast is
+    heavy rain or thundery showers — light/moderate rain gets the rain
+    emoji without the umbrella.
+    """
     if not _REGIONS_AVAILABLE:
         return ""
 
@@ -411,7 +473,10 @@ def fmt_rain_forecast(readings: dict) -> str:
     region_names = "/".join(r.title() for r in ordered)
     area_word = "area" if len(ordered) == 1 else "areas"
 
-    return f"{emoji} Next 2hrs in {region_names} {area_word} ☔"
+    line = f"{emoji} Next 2hrs in {region_names} {area_word}"
+    if is_heavy_or_thundery(overall_worst_fc):
+        line += " ☔"
+    return line
 
 
 def _pad(value: float | None, arrow: str, num_width: int) -> str:
@@ -501,48 +566,4 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Singapore haze monitor")
     ap.add_argument("--preview", action="store_true",
                     help="Print the message without sending or saving state")
-    ap.add_argument("--force", action="store_true",
-                    help="Send even if timestamp is unchanged")
-    ap.add_argument("--to", metavar="CHAT_ID", default=None,
-                    help="Send to this chat ID instead of TELEGRAM_CHAT_ID (testing)")
-    args = ap.parse_args()
-
-    try:
-        current = fetch_all()
-    except Exception as e:
-        log.error("Fetch failed: %s", e)
-        return 1
-
-    state = load_state()
-    prev = state.get("last_reading")
-
-    text = format_message(current, prev)
-
-    print("--- Message preview ---")
-    print(text)
-    print("-----------------------")
-
-    if args.preview:
-        return 0
-
-    if not args.force and state_key(current) == state_key(prev):
-        log.info("timestamp unchanged (%s); skipping Telegram message",
-                 state_key(current))
-        return 0
-
-    try:
-        send_telegram(text, chat_id=args.to)
-    except Exception as e:
-        log.error("Telegram send failed: %s", e)
-        return 1
-
-    state["last_reading"] = current
-    state["last_sent_at"] = datetime.now(SGT).isoformat()
-    save_state(state)
-    log.info("Message sent to Telegram (force=%s, to=%s)",
-             args.force, args.to or "default")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    ap.add_a
