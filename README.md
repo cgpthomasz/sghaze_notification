@@ -39,17 +39,33 @@ Trend arrows: `↑` rose · `↓` fell · blank = unchanged
 
 One circle per column, based on the worst region in that column.
 
-**PM2.5 (µg/m³):** 🟢 0–55 · 🟠 56–150 · 🔴 151–250 · 💀 ≥251
+**PM2.5 (µg/m³):**
+| Range | Circle |
+|---|---|
+| 0 – 55 | 🟢 |
+| 56 – 100 | 🟡 |
+| 101 – 150 | 🟠 |
+| 151 – 250 | 🔴 |
+| ≥ 251 | 💀 |
 
-**PSI:** 🟢 0–50 · 🟠 51–100 · 🔴 101–200 · 🟣 201–300 · 💀 ≥301
+**PSI:**
+| Range | Circle |
+|---|---|
+| 0 – 50 | 🟢 |
+| 51 – 100 | 🟡 |
+| 101 – 200 | 🟠 |
+| 201 – 300 | 🔴 |
+| ≥ 301 | 💀 |
 
 ### Rain emoji
 
-| Forecast | Emoji |
-|---|---|
-| Thundery showers | ⛈️ |
-| Heavy rain/showers | 🌧️ |
-| Light/moderate/passing | 🌦️ |
+| Forecast | Emoji | Umbrella ☔? |
+|---|---|---|
+| Thundery showers | ⛈️ | ✅ Yes |
+| Heavy rain / heavy showers | 🌧️ | ✅ Yes |
+| Light / moderate / passing | 🌦️ | ❌ No |
+
+The umbrella is appended only for heavy or thundery rain — a light drizzle gets the rain emoji alone.
 
 ---
 
@@ -96,33 +112,74 @@ GitHub's native cron is best-effort. For reliable hourly triggers, use **cron-jo
 
 ---
 
-## Files
+## Configuration
 
-| File | Purpose |
-|---|---|
-| `psi_monitor.py` | Main script |
-| `regions.py` | Town → NEA region mapping (used for rain forecast) |
-| `requirements.txt` | Dependencies (`requests`) |
-| `.github/workflows/psi_monitor.yml` | Workflow |
+**Toggle metrics** — edit `psi_monitor.py`:
 
-**Note:** If `regions.py` is missing, the script still runs — it just skips the rain line. All other features work normally. A warning appears in the Actions log:
-
+```python
+SEND_PSI_24H  = True
+SEND_PM25_24H = True
+SEND_PM25_1H  = True
 ```
 
-WARNING regions.py not found — rain forecast will be skipped
+Alert gating — only send when conditions warrant it:
 
+```python
+SEND_ONLY_ON_ALERT      = False   # set True to enable
+ALERT_1H_PM25_THRESHOLD = 0       # µg/m³ — any region above this triggers
+```
+
+When SEND_ONLY_ON_ALERT = True, the script sends only if:
+
+· any region's 1-hour PM2.5 exceeds ALERT_1H_PM25_THRESHOLD, OR
+· any region's forecast includes heavy rain or thundery showers
+
+Useful thresholds:
+
+· 0 — effectively always (PM2.5 is never zero)
+· 56 — any region into the "Elevated" band or worse
+· 151 — any region into the "High" band or worse
+· 251 — only "Very High" triggers
+
+--force bypasses gating for testing.
+
+Ruler width:
+
+```python
+HR = "━" * 18    # 18 chars ≈ 50% width
+```
+
+Region order:
+
+```python
+REGION_ORDER = ["central", "west", "south", "east", "north"]
 ```
 
 ---
 
-## CLI
+Files
 
-| Flag | Effect |
-|---|---|
-| *(none)* | Send only if timestamp changed |
-| `--preview` | Print only, no send, no state |
-| `--force` | Send even if unchanged |
-| `--to CHAT_ID` | Send to a different chat (testing) |
+File Purpose
+psi_monitor.py Main script
+regions.py Town → NEA region mapping (used for rain forecast)
+requirements.txt Dependencies (requests)
+.github/workflows/psi_monitor.yml Workflow
+
+Note: If regions.py is missing, the script still runs — it just skips the rain line. All other features work normally. A warning appears in the Actions log:
+
+```
+WARNING regions.py not found — rain forecast will be skipped
+```
+
+---
+
+CLI
+
+Flag Effect
+(none) Send only if timestamp changed (and alert conditions, if enabled)
+--preview Print only, no send, no state
+--force Send even if unchanged; bypasses alert gating
+--to CHAT_ID Send to a different chat (testing)
 
 ```bash
 python psi_monitor.py --preview
@@ -141,32 +198,6 @@ test Your DM (TELEGRAM_CHAT_ID_TEST) Yes
 
 ---
 
-Configuration
-
-Toggle metrics — edit psi_monitor.py:
-
-```python
-SEND_PSI_24H  = True
-SEND_PM25_24H = True
-SEND_PM25_1H  = True
-```
-
-Ruler width:
-
-```python
-HR = "━" * 18    # 18 chars ≈ 50% width
-```
-
-Region order:
-
-```python
-REGION_ORDER = ["central", "west", "south", "east", "north"]
-```
-
-Rain forecast thresholds — edit FORECAST_SEVERITY in psi_monitor.py to adjust the emoji ranking.
-
----
-
 Troubleshooting
 
 Bad Request: chat not found — Bot not added to channel, or wrong TELEGRAM_CHAT_ID
@@ -178,6 +209,8 @@ Failed to save: Unable to reserve cache — Use a fresh run (Actions → Run wor
 Rain line never appears — Check that regions.py is present on the branch being run, and that at least one town has rain forecast. The log will show WARNING regions.py not found if the file is missing.
 
 SyntaxError: '(' was never closed — A merge conflict left broken code. Replace the affected file with the full version from the repo history.
+
+No messages despite SEND_ONLY_ON_ALERT = True — Either no region exceeded the PM2.5 threshold, or no region had heavy/thundery rain. Check the Actions log — it prints alert gating enabled and no alert condition met; skipping.
 
 Scheduled runs not firing — Check Actions tab for a disabled banner; confirm workflow is on main; use cron-job.org for reliability
 
@@ -203,5 +236,11 @@ Free. GitHub Actions is unlimited for public repos. ~30 seconds per run.
 License
 
 MIT
+
+```
+
+---
+
+## 📱 Updated welcome message
 
 ```
