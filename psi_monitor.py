@@ -56,7 +56,7 @@ SEND_PM25_1H  = True
 #   - any region has heavy rain / thundery showers forecast in the next 2h
 #
 # Default: False (send on any timestamp change, current behaviour).
-SEND_ONLY_ON_ALERT         = True
+SEND_ONLY_ON_ALERT         = False
 ALERT_1H_PM25_THRESHOLD    = 0      # µg/m³ — raise to e.g. 56 for "Elevated and above"
 
 # Endpoints (verified 2026-10)
@@ -566,4 +566,56 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Singapore haze monitor")
     ap.add_argument("--preview", action="store_true",
                     help="Print the message without sending or saving state")
-    ap.add_a
+    ap.add_argument("--force", action="store_true",
+                    help="Send even if timestamp is unchanged (and bypass alert gating)")
+    ap.add_argument("--to", metavar="CHAT_ID", default=None,
+                    help="Send to this chat ID instead of TELEGRAM_CHAT_ID (testing)")
+    args = ap.parse_args()
+
+    try:
+        current = fetch_all()
+    except Exception as e:
+        log.error("Fetch failed: %s", e)
+        return 1
+
+    state = load_state()
+    prev = state.get("last_reading")
+
+    text = format_message(current, prev)
+
+    print("--- Message preview ---")
+    print(text)
+    print("-----------------------")
+
+    if args.preview:
+        return 0
+
+    # Dedup: skip if timestamp unchanged (unless --force)
+    if not args.force and state_key(current) == state_key(prev):
+        log.info("timestamp unchanged (%s); skipping Telegram message",
+                 state_key(current))
+        return 0
+
+    # Alert gating: skip if enabled and conditions not met (unless --force)
+    if SEND_ONLY_ON_ALERT and not args.force:
+        if not is_alert_condition(current):
+            log.info("alert gating enabled and no alert condition met; skipping")
+            return 0
+        log.info("alert gating enabled and condition met; sending")
+
+    try:
+        send_telegram(text, chat_id=args.to)
+    except Exception as e:
+        log.error("Telegram send failed: %s", e)
+        return 1
+
+    state["last_reading"] = current
+    state["last_sent_at"] = datetime.now(SGT).isoformat()
+    save_state(state)
+    log.info("Message sent to Telegram (force=%s, to=%s)",
+             args.force, args.to or "default")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
