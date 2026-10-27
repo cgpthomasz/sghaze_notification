@@ -56,8 +56,8 @@ SEND_PM25_1H  = True
 #   - any region has heavy rain / thundery showers forecast in the next 2h
 #
 # Default: False (send on any timestamp change, current behaviour).
-SEND_ONLY_ON_ALERT         = False
-ALERT_1H_PM25_THRESHOLD    = 0      # µg/m³ — raise to e.g. 56 for "Elevated and above"
+SEND_ONLY_ON_ALERT         = True
+ALERT_1H_PM25_THRESHOLD    = 80      # µg/m³ — raise to e.g. 56 for "Elevated and above"
 
 # Endpoints (verified 2026-10)
 PSI_URL           = "https://api-open.data.gov.sg/v2/real-time/api/psi"
